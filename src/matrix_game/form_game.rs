@@ -162,6 +162,22 @@ impl ApplicationHandler for App {
         }
 
         let attrs = WindowAttributes::default().with_title("MatrixGame");
+        // Host-supplied display settings (`SRobotsSettings` resolution).
+        #[cfg(not(target_arch = "wasm32"))]
+        let attrs = {
+            let num = |var: &str| std::env::var(var).ok().and_then(|v| v.parse::<u32>().ok());
+            let attrs = match (num("MG_WIDTH"), num("MG_HEIGHT")) {
+                (Some(w), Some(h)) if w > 0 && h > 0 => {
+                    attrs.with_inner_size(winit::dpi::LogicalSize::new(w, h))
+                }
+                _ => attrs,
+            };
+            if std::env::var("MG_FULLSCREEN").as_deref() == Ok("1") {
+                attrs.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)))
+            } else {
+                attrs
+            }
+        };
 
         #[cfg(target_arch = "wasm32")]
         let attrs = {
@@ -273,10 +289,12 @@ impl ApplicationHandler for App {
 
             let mut iface_list =
                 crate::matrix_game::interface::IFaceList::load_default_panels(&matrix_data);
-            let map_texts = std::fs::read("assets/menu/maps.txt")
-                .ok()
-                .and_then(|b| String::from_utf8(b).ok())
-                .and_then(|raw| parse_map_texts(&raw, &briefing_stem()));
+            let map_texts = host_map_texts().or_else(|| {
+                std::fs::read("assets/menu/maps.txt")
+                    .ok()
+                    .and_then(|b| String::from_utf8(b).ok())
+                    .and_then(|raw| parse_map_texts(&raw, &briefing_stem()))
+            });
             seed_mission_briefing(&mut iface_list, &game, map_texts.as_ref());
             log::info!("iface: loaded {} panels", iface_list.panels.len());
             let mut iface_renderer = crate::matrix_game::interface::InterfaceRenderer::new(
@@ -677,7 +695,13 @@ impl ApplicationHandler for App {
         };
 
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(state) = self.state.borrow().as_ref() {
+                    write_host_result(1, &state.game);
+                }
+                event_loop.exit()
+            }
 
             WindowEvent::Resized(size) => {
                 if size.width > 0 && size.height > 0 {
@@ -2815,6 +2839,51 @@ fn seed_mission_briefing(
     iface_list.hint_replacer.set("_begin", &begin);
     iface_list.hint_replacer.set("_win", &win);
     iface_list.hint_replacer.set("_loose", &loose);
+}
+
+/// Briefing texts handed over by the Rangers host — the `txt_start` /
+/// `txt_win` / `txt_loss` arguments of the DLL `Run` (MatrixGameDll.cpp).
+/// The host process passes them as UTF-8 files named by `MG_TXT_BEGIN` /
+/// `MG_TXT_WIN` / `MG_TXT_LOSS`.
+#[cfg(not(target_arch = "wasm32"))]
+fn host_map_texts() -> Option<MapTexts> {
+    let read = |var: &str| -> String {
+        std::env::var(var)
+            .ok()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .unwrap_or_default()
+    };
+    let begin = read("MG_TXT_BEGIN");
+    (!begin.is_empty()).then(|| MapTexts {
+        begin,
+        win: read("MG_TXT_WIN"),
+        loose: read("MG_TXT_LOSS"),
+    })
+}
+
+/// Report the session outcome to the Rangers host: `g_ExitState` plus the
+/// player-side statistics `Run` copies into `SRobotGameState`
+/// (MatrixGameDll.cpp protectedBlock2). Written to the `MG_RESULT` file.
+#[cfg(not(target_arch = "wasm32"))]
+fn write_host_result(exit_state: i32, game: &crate::matrix_game::logic::MapLogic) {
+    use crate::matrix_game::side::Stat;
+    let Ok(path) = std::env::var("MG_RESULT") else {
+        return;
+    };
+    let side = &game.player_side;
+    let text = format!(
+        "exit={}\ntime={}\nrobot_build={}\nrobot_kill={}\nturret_build={}\nturret_kill={}\nbuilding_kill={}\n",
+        exit_state,
+        side.get_stat(Stat::Time),
+        side.get_stat(Stat::RobotBuild),
+        side.get_stat(Stat::RobotKill),
+        side.get_stat(Stat::TurretBuild),
+        side.get_stat(Stat::TurretKill),
+        side.get_stat(Stat::BuildingKill),
+    );
+    if let Err(e) = std::fs::write(&path, text) {
+        log::error!("host result: failed to write {path}: {e}");
+    }
 }
 
 /// Per-map Lang.dat RobotsMap briefing texts, paragraphs pre-joined.
@@ -5053,10 +5122,13 @@ fn load_map() -> (
         "Data/robots.pkg",
         "../../Data/robots.pkg",
     ];
-    let pkg_path = candidates
-        .iter()
-        .find(|c| std::path::Path::new(c).exists())
-        .unwrap_or(&"../Data/robots.pkg");
+    let host_pkg = std::env::var("MG_PKG").ok();
+    let pkg_path = host_pkg.as_deref().unwrap_or_else(|| {
+        candidates
+            .iter()
+            .find(|c| std::path::Path::new(c).exists())
+            .unwrap_or(&"../Data/robots.pkg")
+    });
 
     log::info!("loading pkg: {}", pkg_path);
     let pkg_data = std::fs::read(pkg_path).expect("failed to read robots.pkg");
@@ -5069,10 +5141,13 @@ fn load_map() -> (
         "Data/robots.dat",
         "../../Data/robots.dat",
     ];
-    let dat_path = dat_candidates
-        .iter()
-        .find(|c| std::path::Path::new(c).exists())
-        .expect("robots.dat is required; place it next to robots.pkg (e.g. ../Data/robots.dat)");
+    let host_dat = std::env::var("MG_DAT").ok();
+    let dat_path = host_dat.as_deref().unwrap_or_else(|| {
+        dat_candidates
+            .iter()
+            .find(|c| std::path::Path::new(c).exists())
+            .expect("robots.dat is required; place it next to robots.pkg (e.g. ../Data/robots.dat)")
+    });
     log::info!("loading matrix data: {}", dat_path);
     let dat_bytes = std::fs::read(dat_path).expect("failed to read robots.dat");
     let matrix_data = Storage::from_bytes(&dat_bytes).expect("failed to parse robots.dat CStorage");
@@ -5613,6 +5688,8 @@ fn dispatch_dialog_action(
         }
         A::OkStatExit => {
             leave_dialog_mode(state);
+            #[cfg(not(target_arch = "wasm32"))]
+            write_host_result(state.exit_state, &state.game);
             exit_game(state.exit_state);
         }
         A::OkStatBack => leave_dialog_mode(state),
@@ -5656,7 +5733,21 @@ fn restart_game() {
         }
     }
     #[cfg(not(target_arch = "wasm32"))]
-    std::process::exit(0);
+    {
+        // Under the Rangers host the session must survive a restart, so
+        // re-exec ourselves with the same arguments and environment.
+        #[cfg(unix)]
+        if std::env::var_os("MG_RESULT").is_some() {
+            use std::os::unix::process::CommandExt;
+            if let Ok(exe) = std::env::current_exe() {
+                let err = std::process::Command::new(exe)
+                    .args(std::env::args_os().skip(1))
+                    .exec();
+                log::error!("restart: exec failed: {err}");
+            }
+        }
+        std::process::exit(0);
+    }
 }
 
 // ── In-scope keyboard map (MatrixFormGame.cpp:1172-1560, non-cheat,

@@ -98,7 +98,7 @@ matrix_game/shadow.rs.
 | matrix_game/side_ai.rs        | MatrixSide.cpp enemy-AI logic (TaktHL, TaktTL, WarTL/RepairTL, Regroup, BuildRobot/BuildCannon, ClacSpawnTeam) |
 | matrix_game/ter_surface.rs    | MatrixTerSurface.cpp              |
 | matrix_game/robot.rs          | MatrixRobot.cpp (CMatrixRobotAI — full order pool (SOrder), spawn/move-out, MoveTo + collision callback + step-aside, GetLost, SBotWeapon fire control / heat / Damage / DOT) |
-| matrix_game/sound.rs          | MatrixSoundManager.cpp (CSound/CSoundArray mixer: CalcPanVol, 16-slot eviction, layers, Pos2Key dedup, ttl/fade; voices go to the `SoundOutput` host table — WebAudio in platform/audio_web.rs, silent on native like the NULL-g_RangersInterface original) |
+| matrix_game/sound.rs          | MatrixSoundManager.cpp (CSound/CSoundArray mixer: CalcPanVol, 16-slot eviction, layers, Pos2Key dedup, ttl/fade; voices go to the `SoundOutput` host table — WebAudio in platform/audio_web.rs, rodio in platform/audio_native.rs) |
 | matrix_game/water.rs          | MatrixWater.cpp + BuildWater in MatrixMapGroup.cpp + WaterAlpha_t3 in MatrixRenderPipeline.cpp |
 
 N/A-by-design (D3D9 infrastructure replaced by the wgpu glue):
@@ -192,6 +192,8 @@ MatrixState / MatrixTactics class family is dead code in the original
 | platform/web.rs  | WASM-specific time / fs                     |
 | platform/audio.rs | `SoundOutput` host table (the `g_RangersInterface` sound fn-pointers) |
 | platform/audio_web.rs | WebAudio backend (samples from `assets/sounds.bundle`, music playlist) |
+| platform/audio_native.rs | rodio backend (samples read from the Rangers `Sound.pkg` / `voices<Lang>.pkg` archives; the soundtrack stays with the host) |
+| platform/sound_pkg_map.rs | `Sound.X` resource id → archive file table shared by the native backend and `examples/pack_sounds.rs` |
 
 ## shaders/ (WGSL pulled out of the fused renderer files)
 

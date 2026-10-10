@@ -21,6 +21,7 @@ ruzstd = "0.8.3"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = "0.11"
 pollster   = "0.4"
+rodio = { version = "0.22.2", default-features = false, features = ["playback", "wav", "vorbis", "mp3", "symphonia-adpcm"] }
 tokio      = { version = "1", features = ["rt", "fs"] }
 zstd = "0.13.3"
 
